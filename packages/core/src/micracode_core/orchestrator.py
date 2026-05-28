@@ -37,7 +37,7 @@ from .context import load_context
 from .llm import LLMFactory
 from .patcher import ProjectContext
 from .prompts import get_prompt
-from .tools import ALL_TOOLS, execute_read_file, execute_shell_exec, execute_write_patch
+from .tools import ALL_TOOLS, execute_grep, execute_list_files, execute_read_file, execute_shell_exec, execute_write_patch
 
 logger = logging.getLogger(__name__)
 
@@ -351,6 +351,35 @@ async def _codegen_tool_loop(
                         approved=True,
                     )
                     tool_result = result_msg
+
+                elif tool_name == "grep":
+                    output = await asyncio.to_thread(
+                        execute_grep,
+                        args.get("pattern", ""),
+                        args.get("path", "."),
+                        project_root,
+                    )
+                    yield ToolResultEvent(
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                        output=output,
+                        approved=True,
+                    )
+                    tool_result = output
+
+                elif tool_name == "list_files":
+                    output = await asyncio.to_thread(
+                        execute_list_files,
+                        args.get("path", "."),
+                        project_root,
+                    )
+                    yield ToolResultEvent(
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                        output=output,
+                        approved=True,
+                    )
+                    tool_result = output
 
                 else:
                     tool_result = f"error: unknown tool {tool_name!r}"
