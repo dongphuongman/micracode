@@ -14,7 +14,7 @@ export interface TopNavProps {
   onPublish?: () => void;
 }
 
-function _Avatar({ className, initials = "JM" }: { className?: string; initials?: string }) {
+function _Avatar({ className, initials = "MC" }: { className?: string; initials?: string }) {
   return (
     <span
       className={cn(
