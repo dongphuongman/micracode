@@ -11,11 +11,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from micracode_api.config import get_settings
 from micracode_core.context import load_context
 from micracode_core.patcher import ProjectContext
-from micracode_core.schemas.codegen import (
-    PatchBundle,
-    PatchFile,
-    SearchReplace,
-)
 from micracode_core.schemas.project import PromptRecord
 from micracode_core.starter.next_default import NEXT_STARTER_FILES
 from micracode_core.storage import Storage
@@ -31,13 +26,30 @@ def _pr(role: str, content: str, *, idx: int = 0) -> PromptRecord:
     )
 
 
-def _make_mock_llm(plan_text: str, bundle: PatchBundle) -> MagicMock:
-    """Mock that returns ``plan_text`` on ainvoke and ``bundle`` via structured output."""
-    structured = MagicMock()
-    structured.ainvoke = AsyncMock(return_value=bundle)
+def _make_mock_llm(plan_text: str, write_patch_calls: list[dict]) -> MagicMock:
+    """Build a mock LLM for the tool-calling pipeline.
+
+    plan_text:        returned by the planner's ainvoke.
+    write_patch_calls: list of {path, content} dicts; each becomes a write_patch
+                       tool call in the first loop iteration.  If empty, the loop
+                       terminates immediately.
+    """
     mock_llm = MagicMock()
     mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=plan_text))
-    mock_llm.with_structured_output.return_value = structured
+
+    bound = MagicMock()
+    mock_llm.bind_tools.return_value = bound
+
+    side_effects: list[AIMessage] = []
+    if write_patch_calls:
+        tool_calls = [
+            {"id": f"w{i}", "name": "write_patch", "args": wp, "type": "tool_call"}
+            for i, wp in enumerate(write_patch_calls)
+        ]
+        side_effects.append(AIMessage(content="", tool_calls=tool_calls))
+    side_effects.append(AIMessage(content="Done"))
+
+    bound.ainvoke = AsyncMock(side_effect=side_effects)
     return mock_llm
 
 
@@ -167,7 +179,7 @@ async def test_stream_planner_exception_surfaced(
 
     from micracode_core import orchestrator as orch
 
-    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None: mock_llm)
+    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None, **kw: mock_llm)
 
     storage.create_project("p4")
     try:
@@ -199,16 +211,13 @@ async def test_stream_threads_explicit_provider_and_model(
 
     storage.create_project("p-override")
 
-    bundle = PatchBundle(
-        files=[PatchFile(path="app/page.tsx", operation="create", content="// ok\n")]
-    )
-    mock_llm = _make_mock_llm("plan", bundle)
+    mock_llm = _make_mock_llm("plan", [{"path": "app/page.tsx", "content": "// ok\n"}])
 
     from micracode_core import orchestrator as orch
 
     calls: list[tuple[str, str]] = []
 
-    def fake_build(provider: str, model: str, config=None):
+    def fake_build(provider: str, model: str, config=None, **kw):
         calls.append((provider, model))
         return mock_llm
 
@@ -275,20 +284,14 @@ async def test_stream_end_to_end_create(monkeypatch: pytest.MonkeyPatch, storage
 
     storage.create_project("p-create")
 
-    bundle = PatchBundle(
-        files=[
-            PatchFile(
-                path="app/page.tsx",
-                operation="create",
-                content="export default function Page() { return null; }\n",
-            )
-        ]
+    mock_llm = _make_mock_llm(
+        "1) Create app/page.tsx.",
+        [{"path": "app/page.tsx", "content": "export default function Page() { return null; }\n"}],
     )
-    mock_llm = _make_mock_llm("1) Create app/page.tsx.", bundle)
 
     from micracode_core import orchestrator as orch
 
-    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None: mock_llm)
+    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None, **kw: mock_llm)
 
     try:
         events = [
@@ -327,27 +330,21 @@ async def test_stream_end_to_end_edit_applies_patch(
     get_settings.cache_clear()
 
     storage.create_project("p-edit")
-    # Seed an existing file we'll edit. Overwrites whatever the starter wrote.
     storage.write_file(
         "p-edit",
         "app/page.tsx",
         'export default function Page() { return <div className="bg-black">hi</div>; }\n',
     )
 
-    bundle = PatchBundle(
-        files=[
-            PatchFile(
-                path="app/page.tsx",
-                operation="edit",
-                edits=[SearchReplace(search="bg-black", replace="bg-white")],
-            )
-        ]
+    patched_content = 'export default function Page() { return <div className="bg-white">hi</div>; }\n'
+    mock_llm = _make_mock_llm(
+        "1) Swap bg-black for bg-white.",
+        [{"path": "app/page.tsx", "content": patched_content}],
     )
-    mock_llm = _make_mock_llm("1) Swap bg-black for bg-white.", bundle)
 
     from micracode_core import orchestrator as orch
 
-    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None: mock_llm)
+    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None, **kw: mock_llm)
 
     try:
         events = [
@@ -374,48 +371,46 @@ async def test_stream_end_to_end_edit_applies_patch(
 
 
 @pytest.mark.asyncio
-async def test_stream_patch_mismatch_is_recoverable(
+async def test_stream_write_patch_bad_path_does_not_abort_loop(
     monkeypatch: pytest.MonkeyPatch, storage: Storage
 ) -> None:
+    """write_patch with an unsafe path returns an error to the LLM; the loop continues."""
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
     get_settings.cache_clear()
 
-    storage.create_project("p-mismatch")
-    storage.write_file("p-mismatch", "app/page.tsx", "hello world\n")
+    storage.create_project("p-badpath")
 
-    bundle = PatchBundle(
-        files=[
-            PatchFile(
-                path="app/page.tsx",
-                operation="edit",
-                edits=[SearchReplace(search="does-not-exist", replace="x")],
-            ),
-            PatchFile(path="app/extra.tsx", operation="create", content="export const x = 1;"),
-        ]
+    # Two write_patch calls in one round: first has an unsafe path, second is valid.
+    mock_llm = _make_mock_llm(
+        "write two files",
+        [
+            {"path": "../../etc/passwd", "content": "bad"},
+            {"path": "app/extra.tsx", "content": "export const x = 1;"},
+        ],
     )
-    mock_llm = _make_mock_llm("edit + add", bundle)
 
     from micracode_core import orchestrator as orch
 
-    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None: mock_llm)
+    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None, **kw: mock_llm)
 
     try:
         events = [
             evt
             async for evt in orch.run_codegen_stream(
-                project_id="p-mismatch", prompt="x", storage=storage
+                project_id="p-badpath", prompt="x", storage=storage
             )
         ]
     finally:
         get_settings.cache_clear()
 
-    errors = [e for e in events if e.type == "error"]
     writes = [e for e in events if e.type == "file.write"]
-    # The mismatched edit becomes a recoverable error; the other op still runs.
-    assert any(e.recoverable for e in errors)
+    # The bad-path write_patch returned an error tool result; the second op still ran.
     assert any(w.path == "app/extra.tsx" for w in writes)
-    # Stream still completes with a done status.
+    # Stream completes with done (no abort).
     assert any(e.type == "status" and getattr(e, "stage", None) == "done" for e in events)
+    # No non-recoverable error event.
+    non_recoverable = [e for e in events if e.type == "error" and not e.recoverable]
+    assert not non_recoverable, f"unexpected non-recoverable errors: {non_recoverable}"
 
 
 # ---------------------------------------------------------------------------
@@ -432,14 +427,11 @@ async def test_stream_threads_history_to_planner_and_codegen(
 
     storage.create_project("p-hist")
 
-    bundle = PatchBundle(
-        files=[PatchFile(path="app/page.tsx", operation="create", content="// ok\n")]
-    )
-    mock_llm = _make_mock_llm("plan", bundle)
+    mock_llm = _make_mock_llm("plan", [{"path": "app/page.tsx", "content": "// ok\n"}])
 
     from micracode_core import orchestrator as orch
 
-    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None: mock_llm)
+    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None, **kw: mock_llm)
 
     history = [
         _pr("user", "earlier turn", idx=1),
@@ -459,28 +451,22 @@ async def test_stream_threads_history_to_planner_and_codegen(
     finally:
         get_settings.cache_clear()
 
-    # Both LLM calls received the system prompt, then the history turns, then
-    # a HumanMessage with the current prompt.
+    # Planner received system prompt, then history turns, then current HumanMessage.
     planner_messages = mock_llm.ainvoke.await_args[0][0]
     assert isinstance(planner_messages[0], SystemMessage)
-    assert [type(m).__name__ for m in planner_messages[1:3]] == [
-        "HumanMessage",
-        "AIMessage",
-    ]
+    assert [type(m).__name__ for m in planner_messages[1:3]] == ["HumanMessage", "AIMessage"]
     assert planner_messages[1].content == "earlier turn"
     assert planner_messages[2].content == "earlier reply"
     assert isinstance(planner_messages[-1], HumanMessage)
     assert "now do this" in planner_messages[-1].content
 
-    codegen_structured = mock_llm.with_structured_output.return_value
-    codegen_messages = codegen_structured.ainvoke.await_args[0][0]
+    # Tool loop first call also received the same history in the initial messages.
+    bound_mock = mock_llm.bind_tools.return_value
+    codegen_messages = bound_mock.ainvoke.call_args_list[0][0][0]
     assert isinstance(codegen_messages[0], SystemMessage)
-    assert [type(m).__name__ for m in codegen_messages[1:3]] == [
-        "HumanMessage",
-        "AIMessage",
-    ]
+    assert [type(m).__name__ for m in codegen_messages[1:3]] == ["HumanMessage", "AIMessage"]
 
-    # Confirm the stream actually produced a file write too.
+    # Confirm the stream produced a file write.
     assert any(e.type == "file.write" for e in events)
 
 
@@ -533,6 +519,230 @@ def test_render_context_block_surfaces_placeholder_hint() -> None:
     assert "app/page.tsx" in rendered
     # The per-file marker is also present.
     assert "app/page.tsx (placeholder scaffold)" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Plan mode / Build mode — Slice 4 & 5
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_terminal_event_is_plan_ready(
+    monkeypatch: pytest.MonkeyPatch, storage: Storage
+) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    storage.create_project("p-plan-mode")
+
+    mock_llm = _make_mock_llm("1) Create page.", [{"path": "app/page.tsx", "content": "// ok\n"}])
+
+    from micracode_core import orchestrator as orch
+
+    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None, **kw: mock_llm)
+
+    try:
+        events = [
+            evt
+            async for evt in orch.run_codegen_stream(
+                project_id="p-plan-mode",
+                prompt="create a page",
+                storage=storage,
+                mode="plan",
+            )
+        ]
+    finally:
+        get_settings.cache_clear()
+
+    status_stages = [getattr(e, "stage", None) for e in events if e.type == "status"]
+    assert status_stages[-1] == "plan_ready", f"expected plan_ready as terminal stage, got {status_stages}"
+    assert "done" not in status_stages, "build mode stages must not appear in plan mode"
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_emits_no_file_events(
+    monkeypatch: pytest.MonkeyPatch, storage: Storage
+) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    storage.create_project("p-plan-no-files")
+
+    mock_llm = _make_mock_llm("plan text", [{"path": "app/page.tsx", "content": "// ok\n"}])
+
+    from micracode_core import orchestrator as orch
+
+    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None, **kw: mock_llm)
+
+    try:
+        events = [
+            evt
+            async for evt in orch.run_codegen_stream(
+                project_id="p-plan-no-files",
+                prompt="do stuff",
+                storage=storage,
+                mode="plan",
+            )
+        ]
+    finally:
+        get_settings.cache_clear()
+
+    file_event_types = {e.type for e in events if e.type in ("file.write", "file.delete")}
+    assert not file_event_types, f"plan mode must emit no file events, got: {file_event_types}"
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_emits_plan_text_before_plan_ready(
+    monkeypatch: pytest.MonkeyPatch, storage: Storage
+) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    storage.create_project("p-plan-text")
+
+    mock_llm = _make_mock_llm("Here is the plan.", [{"path": "app/page.tsx", "content": "// ok\n"}])
+
+    from micracode_core import orchestrator as orch
+
+    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None, **kw: mock_llm)
+
+    try:
+        events = [
+            evt
+            async for evt in orch.run_codegen_stream(
+                project_id="p-plan-text",
+                prompt="create a page",
+                storage=storage,
+                mode="plan",
+            )
+        ]
+    finally:
+        get_settings.cache_clear()
+
+    # Plan text must appear as MessageDeltaEvent before the plan_ready status.
+    delta_indices = [i for i, e in enumerate(events) if e.type == "message.delta"]
+    plan_ready_indices = [
+        i for i, e in enumerate(events) if e.type == "status" and getattr(e, "stage", None) == "plan_ready"
+    ]
+    assert delta_indices, "expected at least one MessageDeltaEvent"
+    assert plan_ready_indices, "expected a plan_ready StatusEvent"
+    assert delta_indices[-1] < plan_ready_indices[0], (
+        "plan text delta must precede the plan_ready event"
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_mode_is_default_and_emits_done(
+    monkeypatch: pytest.MonkeyPatch, storage: Storage
+) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    storage.create_project("p-build-default")
+
+    mock_llm = _make_mock_llm("plan", [{"path": "app/page.tsx", "content": "// ok\n"}])
+
+    from micracode_core import orchestrator as orch
+
+    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None, **kw: mock_llm)
+
+    try:
+        events = [
+            evt
+            async for evt in orch.run_codegen_stream(
+                project_id="p-build-default",
+                prompt="create a page",
+                storage=storage,
+                # no mode= argument — should default to build
+            )
+        ]
+    finally:
+        get_settings.cache_clear()
+
+    status_stages = [getattr(e, "stage", None) for e in events if e.type == "status"]
+    assert "done" in status_stages, "build mode must terminate with done"
+    assert "plan_ready" not in status_stages, "plan_ready must not appear in build mode"
+    assert any(e.type == "file.write" for e in events), "build mode must emit file events"
+
+
+# ---------------------------------------------------------------------------
+# Reasoning model prompt placement — Slice 3
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_plan_uses_human_message_for_openai_reasoning_family(
+    monkeypatch: pytest.MonkeyPatch, storage: Storage
+) -> None:
+    """For openai-reasoning, the system prompt must be the first HumanMessage."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+    get_settings.cache_clear()
+
+    storage.create_project("p-reasoning")
+
+    mock_llm = _make_mock_llm("plan text", [{"path": "app/page.tsx", "content": "// ok\n"}])
+
+    from micracode_core import orchestrator as orch
+
+    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None, **kw: mock_llm)
+
+    try:
+        events = [
+            evt
+            async for evt in orch.run_codegen_stream(
+                project_id="p-reasoning",
+                prompt="add a page",
+                storage=storage,
+                provider="openai",
+                model="gpt-4.1",
+                family="openai-reasoning",
+            )
+        ]
+    finally:
+        get_settings.cache_clear()
+
+    planner_messages = mock_llm.ainvoke.await_args[0][0]
+    # First message must be HumanMessage (not SystemMessage) for reasoning models.
+    assert isinstance(planner_messages[0], HumanMessage), (
+        f"expected HumanMessage at index 0 for openai-reasoning, got {type(planner_messages[0])}"
+    )
+    assert not any(isinstance(m, SystemMessage) for m in planner_messages), (
+        "no SystemMessage expected for openai-reasoning family"
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_uses_system_message_for_non_reasoning_family(
+    monkeypatch: pytest.MonkeyPatch, storage: Storage
+) -> None:
+    """For standard families, the system prompt goes into a SystemMessage."""
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    storage.create_project("p-non-reasoning")
+
+    mock_llm = _make_mock_llm("plan text", [{"path": "app/page.tsx", "content": "// ok\n"}])
+
+    from micracode_core import orchestrator as orch
+
+    monkeypatch.setattr(orch, "build_llm", lambda provider, model, config=None, **kw: mock_llm)
+
+    try:
+        _ = [
+            evt
+            async for evt in orch.run_codegen_stream(
+                project_id="p-non-reasoning",
+                prompt="add a page",
+                storage=storage,
+            )
+        ]
+    finally:
+        get_settings.cache_clear()
+
+    planner_messages = mock_llm.ainvoke.await_args[0][0]
+    assert isinstance(planner_messages[0], SystemMessage), (
+        f"expected SystemMessage at index 0 for gemini family, got {type(planner_messages[0])}"
+    )
 
 
 def test_render_context_block_omits_hint_when_no_placeholders() -> None:

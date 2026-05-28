@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import get_settings, settings
@@ -74,9 +74,22 @@ def create_app() -> FastAPI:
 
     # Serve pre-built frontend when static assets are present.
     if _STATIC_DIR.is_dir() and any(_STATIC_DIR.iterdir()):
-        from fastapi.staticfiles import StaticFiles
+        _static_root = _STATIC_DIR.resolve()
 
-        app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="static")
+        @app.get("/{full_path:path}")
+        async def _spa(full_path: str) -> FileResponse:
+            target = (_static_root / full_path).resolve()
+            # Prevent path traversal outside the static directory.
+            if not str(target).startswith(str(_static_root)):
+                return FileResponse(_static_root / "index.html")
+            if target.is_file():
+                return FileResponse(target)
+            # Support trailingSlash pages (e.g. /projects → projects/index.html).
+            index = target / "index.html"
+            if index.is_file():
+                return FileResponse(index)
+            # SPA fallback for any unknown path.
+            return FileResponse(_static_root / "index.html")
 
     @app.exception_handler(Exception)
     async def _unhandled(_: Request, exc: Exception) -> JSONResponse:

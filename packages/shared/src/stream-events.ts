@@ -8,7 +8,7 @@
  * `apps/api/src/micracode_api/schemas/stream.py`.
  */
 
-export type StreamStage = "planning" | "generating" | "done" | "cancelled";
+export type StreamStage = "planning" | "generating" | "done" | "cancelled" | "plan_ready";
 
 /** Incremental chat text from the assistant. */
 export interface MessageDeltaEvent {
@@ -93,7 +93,8 @@ export function isStreamEvent(value: unknown): value is StreamEvent {
         e.stage === "planning" ||
         e.stage === "generating" ||
         e.stage === "done" ||
-        e.stage === "cancelled"
+        e.stage === "cancelled" ||
+        e.stage === "plan_ready"
       );
     }
     case "error": {

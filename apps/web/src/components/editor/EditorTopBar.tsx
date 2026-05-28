@@ -1,10 +1,6 @@
 "use client";
 
-import {
-  Code2,
-  Eye,
-  RefreshCw,
-} from "lucide-react";
+import { Code2, Eye, RefreshCw } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 

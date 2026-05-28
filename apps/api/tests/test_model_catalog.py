@@ -65,6 +65,7 @@ def test_resolve_returns_default_when_both_missing() -> None:
     assert model_catalog.resolve(None, None, settings) == (
         "gemini",
         "gemini-2.5-flash",
+        "gemini",
     )
 
 
@@ -100,4 +101,47 @@ def test_resolve_accepts_valid_selection() -> None:
     assert model_catalog.resolve("openai", "gpt-4.1", settings) == (
         "openai",
         "gpt-4.1",
+        "openai-chat",
     )
+
+
+# ---------------------------------------------------------------------------
+# Family resolution — Slice 1
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_returns_openai_chat_family() -> None:
+    provider, model, family = model_catalog.resolve(
+        "openai", "gpt-4.1", _settings(openai_api_key="sk-x")
+    )
+    assert provider == "openai"
+    assert model == "gpt-4.1"
+    assert family == "openai-chat"
+
+
+def test_resolve_returns_gemini_family() -> None:
+    _, _, family = model_catalog.resolve(
+        "gemini", "gemini-2.5-flash", _settings(google_api_key="gk")
+    )
+    assert family == "gemini"
+
+
+def test_resolve_returns_ollama_family() -> None:
+    provider, model, family = model_catalog.resolve("ollama", "llama3", _settings())
+    assert provider == "ollama"
+    assert model == "llama3"
+    assert family == "ollama"
+
+
+def test_resolve_all_openai_models_return_openai_chat_family() -> None:
+    settings = _settings(openai_api_key="sk-x")
+    for model_id in ("gpt-5.4", "gpt-5-mini", "gpt-4.1"):
+        _, _, family = model_catalog.resolve("openai", model_id, settings)
+        assert family == "openai-chat", f"expected openai-chat for {model_id}"
+
+
+def test_resolve_all_gemini_models_return_gemini_family() -> None:
+    settings = _settings(google_api_key="gk")
+    for model_id in ("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"):
+        _, _, family = model_catalog.resolve("gemini", model_id, settings)
+        assert family == "gemini", f"expected gemini for {model_id}"

@@ -2,17 +2,14 @@
 
 import { ClipboardList, Globe2, MoreHorizontal, RefreshCw } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState } from "react";
 
-import type { ProjectRecord } from "@/lib/api/projects";
+import { ApiError, listProjects, type ProjectRecord } from "@/lib/api/projects";
 import { cn } from "@/lib/utils";
 
 type Tab = "recent" | "deployed";
 
 export interface RecentTasksSectionProps {
-  projects: ProjectRecord[];
-  error: string | null;
   className?: string;
 }
 
@@ -39,14 +36,34 @@ function shortId(id: string): string {
   return `EMT - ${stripped.slice(0, 6) || id.slice(0, 6)}`;
 }
 
-export function RecentTasksSection({
-  projects,
-  error,
-  className,
-}: RecentTasksSectionProps) {
+export function RecentTasksSection({ className }: RecentTasksSectionProps) {
   const [tab, setTab] = useState<Tab>("recent");
-  const router = useRouter();
-  const [isRefreshing, startRefresh] = useTransition();
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const fetchProjects = () => {
+    setIsRefreshing(true);
+    listProjects()
+      .then((data) => {
+        setProjects(data);
+        setError(null);
+      })
+      .catch((err) => {
+        const msg =
+          err instanceof ApiError
+            ? `API error (${err.status}). Is the server running?`
+            : err instanceof Error
+              ? `API unreachable: ${err.message}`
+              : "Unknown error loading projects";
+        setError(msg);
+      })
+      .finally(() => setIsRefreshing(false));
+  };
+
+  useEffect(() => {
+    fetchProjects();
+  }, []);
 
   return (
     <section className={cn("flex w-full flex-col", className)}>
@@ -78,7 +95,7 @@ export function RecentTasksSection({
         </div>
         <button
           type="button"
-          onClick={() => startRefresh(() => router.refresh())}
+          onClick={fetchProjects}
           className="inline-flex size-8 items-center justify-center rounded-md text-zinc-400 transition-all duration-200 ease-in-out hover:bg-[#1b1b1e] hover:text-white"
           aria-label="Refresh"
         >
@@ -124,7 +141,7 @@ function RecentTable({ projects }: { projects: ProjectRecord[] }) {
         {projects.map((p) => (
           <li key={p.id} className="group relative">
             <Link
-              href={`/projects/${p.id}`}
+              href={`/projects?id=${p.id}`}
               className="grid grid-cols-[140px_1fr_200px_40px] items-center gap-4 rounded-md px-4 py-4 text-sm transition-all duration-200 ease-in-out hover:bg-[#1b1b1e]"
             >
               <span className="font-mono text-xs text-zinc-400">

@@ -13,11 +13,30 @@ export type MicracodeDataParts = {
   "file-write": { path: string; content: string };
   "file-delete": { path: string };
   status: {
-    stage: "planning" | "generating" | "done" | "cancelled";
+    stage: "planning" | "generating" | "done" | "cancelled" | "plan_ready";
     note?: string | null;
     snapshot_id?: string | null;
   };
   "shell-exec": { command: string; cwd?: string | null };
+  "tool-call": {
+    tool_call_id: string;
+    tool_name: string;
+    args: Record<string, unknown>;
+    reason: string;
+  };
+  "tool-result": {
+    tool_call_id: string;
+    tool_name: string;
+    output: string;
+    approved: boolean;
+  };
+  "tool-permission-request": {
+    tool_call_id: string;
+    command: string;
+    reason: string;
+    request_id: string;
+  };
+  "tool-denied": { tool_call_id: string };
 };
 
 export interface MicracodeMessageMetadata {

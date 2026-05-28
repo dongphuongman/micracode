@@ -17,6 +17,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  output: "export",
+  trailingSlash: true,
   reactStrictMode: true,
   typedRoutes: true,
   transpilePackages: ["@micracode/shared", "@webcontainer/api"],

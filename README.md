@@ -16,9 +16,9 @@
 <br/>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PyPI](https://img.shields.io/pypi/v/micracode.svg)](https://pypi.org/project/micracode/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Next.js 15](https://img.shields.io/badge/Next.js-15-black.svg)](https://nextjs.org/)
-[![Bun](https://img.shields.io/badge/Bun-1.1+-fbf0df.svg)](https://bun.sh/)
 
 </div>
 
@@ -27,6 +27,59 @@
 <em>Your local AI coding workspace — no database, no auth, no cloud.</em>
 </div>
 <br />
+
+---
+
+## ⚡ Quick Install
+
+```bash
+pip install micracode
+```
+
+Requires **Python 3.12+**. No Node.js, no Docker, no separate frontend setup.
+
+### 1. Set your API key
+
+**Google Gemini** (default, free tier available):
+```bash
+export GOOGLE_API_KEY=your-key
+```
+
+**OpenAI:**
+```bash
+export LLM_PROVIDER=openai
+export OPENAI_API_KEY=your-key
+export OPENAI_MODEL=gpt-4o
+```
+
+**Ollama** (local, no API key needed):
+```bash
+export LLM_PROVIDER=ollama
+export OLLAMA_MODEL=llama3.2   # any model you have pulled
+```
+
+Or put any of the above in a `.env` file in your working directory.
+
+### 2. Start
+
+```bash
+micracode web
+```
+
+Open **http://localhost:8000** — the full UI and API run from the same process.
+
+```bash
+micracode web --port 9000       # change port
+micracode web --host 0.0.0.0   # expose on your local network
+```
+
+### 3. Build something
+
+- Type a description on the home screen → Micracode generates a working project
+- Chat to iterate, edit code in the Monaco editor, and preview your app live
+- Projects are saved as plain folders at `~/opener-apps/`
+
+---
 
 ## Getting started & staying tuned with us.
 
@@ -77,7 +130,9 @@ Star us, and you will receive all release notifications from GitHub without any 
 
 ---
 
-## 🚀 Getting Started
+## 🛠️ Development Setup
+
+> For contributors and people building from source. If you just want to use Micracode, see [Quick Install](#-quick-install) above.
 
 ### Prerequisites
 - **Node.js** v22.18.0 (pinned via `.nvmrc`)

@@ -38,7 +38,7 @@ export interface ChatPanelProps {
  */
 const autoSubmittedProjectIds = new Set<string>();
 
-type Stage = "idle" | "planning" | "generating" | "done" | "cancelled";
+type Stage = "idle" | "planning" | "generating" | "done" | "cancelled" | "plan_ready";
 
 export function ChatPanel({
   projectId,

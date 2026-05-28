@@ -3,12 +3,12 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
-  FileText,
+  ChevronDown,
+  ChevronRight,
   History,
   RefreshCw,
   Search,
   Sparkles,
-  Terminal,
   Zap,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -44,26 +44,28 @@ export interface V0ChatPanelProps {
   hasInitialHistory?: boolean;
 }
 
-type Stage = "idle" | "planning" | "generating" | "done" | "cancelled";
+type Stage = "idle" | "planning" | "generating" | "done" | "cancelled" | "plan_ready";
 
 type ProcessLog =
   | { id: string; kind: "thought"; seconds: number }
   | { id: string; kind: "brief"; note?: string }
   | { id: string; kind: "explore"; note: string }
-  | { id: string; kind: "file-write"; path: string; created: boolean }
-  | { id: string; kind: "file-delete"; path: string }
-  | { id: string; kind: "shell"; command: string };
+  | {
+      id: string;
+      kind: "tool-call";
+      toolCallId: string;
+      toolName: string;
+      args: Record<string, unknown>;
+      reason: string;
+      output?: string;
+      outputError?: boolean;
+    };
 
 const autoSubmittedProjectIds = new Set<string>();
 
 let logIdCounter = 0;
 const nextLogId = () => `log-${++logIdCounter}-${Date.now()}`;
 
-function basename(path: string): string {
-  const clean = path.replace(/\/+$/, "");
-  const idx = clean.lastIndexOf("/");
-  return idx === -1 ? clean : clean.slice(idx + 1);
-}
 
 function LogRow({ children }: { children: React.ReactNode }) {
   return (
@@ -81,7 +83,28 @@ function LogIcon({ children }: { children: React.ReactNode }) {
   );
 }
 
-function renderLog(log: ProcessLog): React.ReactNode {
+function formatToolCall(toolName: string, args: Record<string, unknown>): string {
+  switch (toolName) {
+    case "read_file":
+      return `-> read ${args.path ?? ""}`;
+    case "write_patch":
+      return `-> write ${args.path ?? ""}`;
+    case "shell_exec":
+      return `$ ${args.command ?? ""}`;
+    case "grep":
+      return `* grep ${args.pattern ?? ""} in ${args.path ?? "."}`;
+    case "list_files":
+      return `* list ${args.path ?? "."}`;
+    default:
+      return `-> ${toolName} ${JSON.stringify(args)}`;
+  }
+}
+
+function renderLog(
+  log: ProcessLog,
+  expandedLogs: Set<string>,
+  toggleExpanded: (id: string) => void,
+): React.ReactNode {
   switch (log.kind) {
     case "thought":
       return (
@@ -110,39 +133,42 @@ function renderLog(log: ProcessLog): React.ReactNode {
           <span>{log.note}</span>
         </LogRow>
       );
-    case "file-write":
+    case "tool-call": {
+      const callLine = formatToolCall(log.toolName, log.args);
+      const isExpanded = expandedLogs.has(log.id);
       return (
-        <LogRow>
-          <LogIcon>
-            <FileText className="size-3.5" />
-          </LogIcon>
-          <span>
-            {log.created ? "Added" : "Updated"}{" "}
-            <span className="font-mono text-zinc-300">{basename(log.path)}</span>
-          </span>
-        </LogRow>
+        <div className="py-0.5 font-mono text-xs space-y-0.5">
+          <div className="text-zinc-600"># {log.reason}</div>
+          <div className="text-zinc-200">{callLine}</div>
+          {log.output !== undefined && (
+            <>
+              <button
+                type="button"
+                onClick={() => toggleExpanded(log.id)}
+                className="flex items-center gap-1 text-zinc-500 hover:text-zinc-300 transition-colors"
+              >
+                {isExpanded ? (
+                  <ChevronDown className="size-3" />
+                ) : (
+                  <ChevronRight className="size-3" />
+                )}
+                <span># output</span>
+              </button>
+              {isExpanded && (
+                <pre
+                  className={cn(
+                    "whitespace-pre-wrap break-all pl-4 text-zinc-400",
+                    log.outputError && "text-red-400",
+                  )}
+                >
+                  {log.output}
+                </pre>
+              )}
+            </>
+          )}
+        </div>
       );
-    case "file-delete":
-      return (
-        <LogRow>
-          <LogIcon>
-            <FileText className="size-3.5" />
-          </LogIcon>
-          <span>
-            Deleted{" "}
-            <span className="font-mono text-zinc-300">{basename(log.path)}</span>
-          </span>
-        </LogRow>
-      );
-    case "shell":
-      return (
-        <LogRow>
-          <LogIcon>
-            <Terminal className="size-3.5" />
-          </LogIcon>
-          <span className="font-mono text-zinc-300">$ {log.command}</span>
-        </LogRow>
-      );
+    }
   }
 }
 
@@ -165,6 +191,16 @@ export function V0ChatPanel({
   const planningStartedAtRef = useRef<number | null>(null);
   const briefEmittedRef = useRef(false);
   const messagesScrollerRef = useRef<HTMLDivElement | null>(null);
+  const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
+
+  const toggleExpanded = useCallback((id: string) => {
+    setExpandedLogs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const transport = useMemo(
     () =>
@@ -217,6 +253,25 @@ export function V0ChatPanel({
     [],
   );
 
+  const updateLogOutput = useCallback(
+    (toolCallId: string, output: string, outputError: boolean) => {
+      setLogsByAssistantId((prev) => {
+        for (const [assistantId, logs] of Object.entries(prev)) {
+          const idx = logs.findIndex(
+            (l) => l.kind === "tool-call" && l.toolCallId === toolCallId,
+          );
+          if (idx !== -1) {
+            const updated = [...logs];
+            updated[idx] = { ...updated[idx]!, output, outputError } as ProcessLog;
+            return { ...prev, [assistantId]: updated };
+          }
+        }
+        return prev;
+      });
+    },
+    [],
+  );
+
   const { messages, setMessages, sendMessage, status, error, stop } =
     useChat<MicracodeUIMessage>({
       id: projectId,
@@ -225,46 +280,42 @@ export function V0ChatPanel({
       onData: (part) => {
         switch (part.type) {
           case "data-file-write": {
-            const path = part.data.path;
-            const created = !useFileSystemStore
-              .getState()
-              .hydratedPaths.has(path);
             useFileSystemStore
               .getState()
-              .upsertFile(path, part.data.content);
-            setMessages((prev) => {
-              appendLogToLatestAssistant(
-                { id: nextLogId(), kind: "file-write", path, created },
-                prev,
-              );
-              return prev;
-            });
+              .upsertFile(part.data.path, part.data.content);
             break;
           }
           case "data-file-delete": {
-            const path = part.data.path;
-            useFileSystemStore.getState().deleteFile(path);
+            useFileSystemStore.getState().deleteFile(part.data.path);
+            break;
+          }
+          case "data-shell-exec": {
+            useWebContainerStore
+              .getState()
+              .enqueueShell(part.data.command, part.data.cwd ?? undefined);
+            break;
+          }
+          case "data-tool-call": {
+            const { tool_call_id, tool_name, args, reason } = part.data;
             setMessages((prev) => {
               appendLogToLatestAssistant(
-                { id: nextLogId(), kind: "file-delete", path },
+                {
+                  id: nextLogId(),
+                  kind: "tool-call",
+                  toolCallId: tool_call_id,
+                  toolName: tool_name,
+                  args,
+                  reason,
+                },
                 prev,
               );
               return prev;
             });
             break;
           }
-          case "data-shell-exec": {
-            const command = part.data.command;
-            useWebContainerStore
-              .getState()
-              .enqueueShell(command, part.data.cwd ?? undefined);
-            setMessages((prev) => {
-              appendLogToLatestAssistant(
-                { id: nextLogId(), kind: "shell", command },
-                prev,
-              );
-              return prev;
-            });
+          case "data-tool-result": {
+            const { tool_call_id, output, approved } = part.data;
+            updateLogOutput(tool_call_id, output, !approved);
             break;
           }
           case "data-status": {
@@ -480,7 +531,7 @@ export function V0ChatPanel({
                 {logs.length > 0 ? (
                   <div className="space-y-0.5">
                     {logs.map((log) => (
-                      <div key={log.id}>{renderLog(log)}</div>
+                      <div key={log.id}>{renderLog(log, expandedLogs, toggleExpanded)}</div>
                     ))}
                   </div>
                 ) : null}

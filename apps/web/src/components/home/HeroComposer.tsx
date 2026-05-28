@@ -22,7 +22,7 @@ export function HeroComposer({ className }: { className?: string }) {
       const record = await createProject({ name: trimmed });
       setPrompt("");
       const nextUrl =
-        `/projects/${record.id}?prompt=${encodeURIComponent(trimmed)}` as Route;
+        `/projects?id=${record.id}&prompt=${encodeURIComponent(trimmed)}` as Route;
       startTransition(() => {
         router.push(nextUrl);
         router.refresh();

@@ -6,7 +6,7 @@ import {
   UserRound,
   Youtube,
   Zap,
-  SendHorizontal
+  SendHorizontal,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 

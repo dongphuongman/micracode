@@ -5,7 +5,14 @@ description = "Micracode core engine: LLM orchestration, storage, and code-gener
 requires-python = ">=3.12"
 authors = [{ name = "Micracode" }]
 license = { text = "MIT" }
-
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Code Generators",
+]
 dependencies = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.5.0",
@@ -16,6 +23,10 @@ dependencies = [
     "langchain-openai>=0.2.0",
     "langchain-ollama>=0.2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Jamessdevops/micracode"
+Source   = "https://github.com/Jamessdevops/micracode"
 
 [build-system]
 requires = ["hatchling"]

@@ -15,6 +15,7 @@ ProviderId = str
 class _Model:
     id: str
     label: str
+    family: str
 
 
 @dataclass(frozen=True)
@@ -29,18 +30,18 @@ _PROVIDERS: tuple[_Provider, ...] = (
         id="openai",
         label="OpenAI",
         models=(
-            _Model(id="gpt-5.4", label="GPT-5.4"),
-            _Model(id="gpt-5-mini", label="GPT-5 Mini"),
-            _Model(id="gpt-4.1", label="GPT-4.1"),
+            _Model(id="gpt-5.4", label="GPT-5.4", family="openai-chat"),
+            _Model(id="gpt-5-mini", label="GPT-5 Mini", family="openai-chat"),
+            _Model(id="gpt-4.1", label="GPT-4.1", family="openai-chat"),
         ),
     ),
     _Provider(
         id="gemini",
         label="Google Gemini",
         models=(
-            _Model(id="gemini-2.5-flash", label="Gemini 2.5 Flash"),
-            _Model(id="gemini-2.5-pro", label="Gemini 2.5 Pro"),
-            _Model(id="gemini-2.5-flash-lite", label="Gemini 2.5 Flash Lite"),
+            _Model(id="gemini-2.5-flash", label="Gemini 2.5 Flash", family="gemini"),
+            _Model(id="gemini-2.5-pro", label="Gemini 2.5 Pro", family="gemini"),
+            _Model(id="gemini-2.5-flash-lite", label="Gemini 2.5 Flash Lite", family="gemini"),
         ),
     ),
 )
@@ -134,14 +135,30 @@ def _default_selection(
     return (first.id, first.models[0].id)
 
 
+def _model_family(provider: str, model_id: str) -> str:
+    """Return the family string for a validated (provider, model_id) pair."""
+    if provider == "ollama":
+        return "ollama"
+    p = _provider(provider)
+    if p is not None:
+        for m in p.models:
+            if m.id == model_id:
+                return m.family
+    return "openai-chat"
+
+
 def resolve(
     provider: str | None,
     model: str | None,
     config: CoreConfig,
-) -> tuple[str, str]:
-    """Validate a requested ``(provider, model)`` pair, filling in defaults."""
+) -> tuple[str, str, str]:
+    """Validate a requested ``(provider, model)`` pair, filling in defaults.
+
+    Returns a ``(provider, model, family)`` triple.
+    """
     if provider is None and model is None:
-        return _default_selection(config)
+        prov, mdl = _default_selection(config)
+        return (prov, mdl, _model_family(prov, mdl))
 
     if provider is None or model is None:
         raise ValueError(
@@ -152,7 +169,7 @@ def resolve(
     if provider == "ollama":
         if not model:
             raise ValueError("model must be non-empty for provider 'ollama'.")
-        return ("ollama", model)
+        return ("ollama", model, "ollama")
 
     p = _provider(provider)
     if p is None:
@@ -175,4 +192,4 @@ def resolve(
             "on the server."
         )
 
-    return (p.id, model)
+    return (p.id, model, _model_family(p.id, model))
