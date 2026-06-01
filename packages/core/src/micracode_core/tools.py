@@ -7,12 +7,20 @@ not by LangChain's tool runner.
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import re
+import socket
 import subprocess
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlparse
 
+import httpx
 import pathspec
+from bs4 import BeautifulSoup
 from langchain_core.tools import StructuredTool
+from markdownify import markdownify as _html_to_markdown
 from pydantic import BaseModel
 from pydantic import Field as PField
 
@@ -275,6 +283,160 @@ def execute_shell_exec(command: str, cwd: Path, output_limit: int) -> str:
         return f"error: {exc}"
 
 
+_WEBFETCH_USER_AGENT = "micracode-webfetch/1.0 (+https://github.com/Jamessdevops/micracode)"
+
+
+def _html_to_text(html: str) -> str:
+    """Strip an HTML document down to readable text, dropping scripts/styles."""
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "template"]):
+        tag.decompose()
+    return soup.get_text(separator="\n", strip=True)
+
+
+_WEBFETCH_REDIRECT_CODES = (301, 302, 303, 307, 308)
+_WEBFETCH_MAX_REDIRECTS = 5
+
+
+def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True if an address is not a routable public host (SSRF target)."""
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local  # includes 169.254.169.254 cloud metadata
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+async def _ssrf_check_host(host: str, port: int) -> str | None:
+    """Resolve ``host`` and return an error string if any address is non-public.
+
+    Returns ``None`` when every resolved address is a routable public host.
+    A literal IP in the URL is checked directly without a DNS lookup.
+    """
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if _ip_is_blocked(literal):
+            return f"error: refusing to fetch private/internal address {host!r}"
+        return None
+
+    try:
+        loop = asyncio.get_running_loop()
+        infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (OSError, socket.gaierror) as exc:
+        return f"error: could not resolve host {host!r}: {exc}"
+    if not infos:
+        return f"error: could not resolve host {host!r}"
+
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if _ip_is_blocked(ip):
+            return (
+                f"error: refusing to fetch {host!r} — it resolves to "
+                f"private/internal address {addr}"
+            )
+    return None
+
+
+async def execute_webfetch(
+    url: str,
+    fmt: str,
+    *,
+    timeout: float,
+    output_limit: int,
+    max_bytes: int,
+    block_private: bool = True,
+) -> str:
+    """Fetch a URL and return its content as markdown, plain text, or raw HTML.
+
+    ``fmt`` is one of ``"markdown"``, ``"text"``, or ``"html"``. Non-HTML
+    responses (JSON, plain text, etc.) are returned verbatim regardless of
+    ``fmt``. The download is capped at ``max_bytes`` and the returned string
+    at ``output_limit`` characters.
+
+    When ``block_private`` is true (the default) the target host — and every
+    redirect hop — is resolved and rejected if it points at a private,
+    loopback, link-local, or otherwise non-public address (SSRF guard).
+    """
+    target = (url or "").strip()
+    if not target:
+        return "error: empty url"
+    if not urlparse(target).scheme:
+        target = "https://" + target
+
+    headers = {"User-Agent": _WEBFETCH_USER_AGENT}
+    content_type = ""
+    chunks: list[bytes] = []
+    encoding = "utf-8"
+    try:
+        # Redirects are followed manually so each hop can be re-validated; httpx
+        # auto-following would let a redirect escape the SSRF guard.
+        async with httpx.AsyncClient(
+            timeout=timeout, follow_redirects=False, headers=headers
+        ) as client:
+            for _hop in range(_WEBFETCH_MAX_REDIRECTS + 1):
+                parsed = urlparse(target)
+                if parsed.scheme not in ("http", "https"):
+                    return (
+                        f"error: unsupported URL scheme {parsed.scheme!r} "
+                        "(only http/https are allowed)"
+                    )
+                host = parsed.hostname
+                if not host:
+                    return f"error: invalid URL (no host): {target!r}"
+                if block_private:
+                    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                    blocked = await _ssrf_check_host(host, port)
+                    if blocked is not None:
+                        return blocked
+
+                async with client.stream("GET", target) as resp:
+                    if resp.status_code in _WEBFETCH_REDIRECT_CODES and "location" in resp.headers:
+                        target = str(resp.url.join(resp.headers["location"]))
+                        continue
+                    resp.raise_for_status()
+                    content_type = resp.headers.get("content-type", "").lower()
+                    total = 0
+                    async for chunk in resp.aiter_bytes():
+                        chunks.append(chunk)
+                        total += len(chunk)
+                        if total > max_bytes:
+                            break
+                    encoding = resp.encoding or "utf-8"
+                break
+            else:
+                return f"error: too many redirects (>{_WEBFETCH_MAX_REDIRECTS})"
+    except httpx.HTTPStatusError as exc:
+        return f"error: HTTP {exc.response.status_code} fetching {target}"
+    except httpx.HTTPError as exc:
+        return f"error: request failed: {exc}"
+
+    body = b"".join(chunks).decode(encoding, errors="replace")
+    is_html = "html" in content_type
+
+    if not is_html or fmt == "html":
+        result = body
+    elif fmt == "text":
+        result = _html_to_text(body)
+    else:  # markdown (default)
+        result = _html_to_markdown(body, heading_style="ATX").strip()
+
+    if len(result) > output_limit:
+        result = result[:output_limit] + f"\n[truncated at {output_limit} chars]"
+    return result or "(empty response)"
+
+
 # ---------------------------------------------------------------------------
 # LangChain tool schemas (for bind_tools — not invoked directly)
 # ---------------------------------------------------------------------------
@@ -316,6 +478,20 @@ class _SearchReplaceInput(BaseModel):
     path: str = PField(description="File path relative to the project root")
     old_str: str = PField(description="Exact string to find (must appear exactly once in the file)")
     new_str: str = PField(description="String to replace it with")
+
+
+class _WebFetchInput(BaseModel):
+    url: str = PField(
+        description="URL to fetch. http/https only; if no scheme is given, https:// is assumed."
+    )
+    format: Literal["text", "markdown", "html"] = PField(
+        default="markdown",
+        description=(
+            "Output format: 'markdown' (HTML converted to Markdown, the default and "
+            "best for reading docs), 'text' (plain text with tags stripped), or 'html' "
+            "(raw HTML). Non-HTML responses are returned as-is regardless of this value."
+        ),
+    )
 
 
 class _QuestionInput(BaseModel):
@@ -392,6 +568,19 @@ SEARCH_REPLACE_TOOL = StructuredTool.from_function(
     args_schema=_SearchReplaceInput,
 )
 
+WEBFETCH_TOOL = StructuredTool.from_function(
+    lambda url, format="markdown": "",
+    name="webfetch",
+    description=(
+        "Fetch the contents of a web page or URL over http/https. "
+        "Returns the page as Markdown by default (or plain text / raw HTML). "
+        "Use this to read documentation, API references, or any external page "
+        "the user links to. Content is returned to you only — it is not saved to "
+        "the project."
+    ),
+    args_schema=_WebFetchInput,
+)
+
 QUESTION_TOOL = StructuredTool.from_function(
     lambda question, options=None: "",
     name="question",
@@ -414,5 +603,6 @@ ALL_TOOLS = [
     GLOB_TOOL,
     LIST_FILES_TOOL,
     SEARCH_REPLACE_TOOL,
+    WEBFETCH_TOOL,
     QUESTION_TOOL,
 ]

@@ -61,5 +61,14 @@ class CoreConfig(BaseSettings):
     max_tool_iterations: int = Field(default=20)
     shell_exec_output_limit: int = Field(default=8192)
 
+    # --- webfetch tool --------------------------------------------------------
+    webfetch_timeout: float = Field(default=30.0)
+    webfetch_output_limit: int = Field(default=50_000)
+    webfetch_max_bytes: int = Field(default=5_000_000)
+    # SSRF guard: reject URLs (and redirect hops) that resolve to private,
+    # loopback, or link-local addresses. Set False to allow fetching e.g. a
+    # local dev server on localhost.
+    webfetch_block_private_ips: bool = Field(default=True)
+
     # --- Storage --------------------------------------------------------------
     opener_apps_dir: Path = Field(default_factory=_default_data_dir)

@@ -38,7 +38,7 @@ from .context import load_context
 from .llm import LLMFactory
 from .patcher import ProjectContext
 from .prompts import get_prompt
-from .tools import ALL_TOOLS, execute_glob, execute_grep, execute_list_files, execute_read_file, execute_search_replace, execute_shell_exec, execute_write_patch
+from .tools import ALL_TOOLS, execute_glob, execute_grep, execute_list_files, execute_read_file, execute_search_replace, execute_shell_exec, execute_webfetch, execute_write_patch
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +191,8 @@ def _build_codegen_messages(
         "inspect existing files before modifying them, search_replace for "
         "targeted edits to existing files, write_patch to create or fully "
         "overwrite files, and shell_exec (only if needed) to run build or "
-        "test commands. If the request is genuinely ambiguous and a wrong "
+        "test commands. Call webfetch to read documentation or any external "
+        "URL the user references. If the request is genuinely ambiguous and a wrong "
         "guess would waste significant work, call question to ask the user "
         "before proceeding. Proceed tool call by tool call until the task is "
         "complete, then stop calling tools."
@@ -462,6 +463,23 @@ async def _codegen_tool_loop(
                         execute_list_files,
                         args.get("path", "."),
                         project_root,
+                    )
+                    yield ToolResultEvent(
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                        output=output,
+                        approved=True,
+                    )
+                    tool_result = output
+
+                elif tool_name == "webfetch":
+                    output = await execute_webfetch(
+                        args.get("url", ""),
+                        args.get("format", "markdown"),
+                        timeout=config.webfetch_timeout,
+                        output_limit=config.webfetch_output_limit,
+                        max_bytes=config.webfetch_max_bytes,
+                        block_private=config.webfetch_block_private_ips,
                     )
                     yield ToolResultEvent(
                         tool_call_id=tool_call_id,
