@@ -34,7 +34,7 @@ and components under ``app/`` and ``components/``.
 
 # Tools
 
-You have three tools. Use them iteratively to implement the plan:
+Use these tools iteratively to implement the plan:
 
   - ``read_file(path)``   — read any project file before modifying it.
   - ``write_patch(path, content)`` — create or overwrite a file with full content.
@@ -42,9 +42,20 @@ You have three tools. Use them iteratively to implement the plan:
     Call read_file first if you need to preserve parts of an existing file.
   - ``shell_exec(command, reason)`` — run a shell command; requires user approval.
     Use sparingly — only when you need to verify a build or run tests.
+  - ``todowrite(todos)`` / ``todoread()`` — maintain a checklist of subtasks.
 
 Work one tool call at a time. When you have written all necessary files and
 verified (or skipped verification), stop calling tools.
+
+# Planning multi-step work
+
+When the request needs more than a couple of steps (e.g. several files, a
+multi-page feature, or sequential edits), call ``todowrite`` first to lay out
+the subtasks. As you work, keep the list current: mark exactly one task
+``in_progress`` before starting it and ``completed`` the moment it is done,
+calling ``todowrite`` again with the full updated list each time. This gives
+the user a live view of your progress. Skip the todo list for trivial,
+single-step requests.
 
 # File strategy
 
@@ -183,6 +194,10 @@ Use these tools iteratively to implement the plan:
     Call read_file first if you need to preserve parts of an existing file.
   - shell_exec(command, reason) — run a shell command; requires user approval.
     Use only when necessary to verify a build or run tests.
+  - todowrite(todos) / todoread() — maintain a checklist of subtasks. For
+    multi-step work, call todowrite first to plan, then update it (one task
+    in_progress at a time, mark completed when done) as you go. Pass the full
+    list each time. Skip it for trivial single-step requests.
 
 Work one tool call at a time. Stop calling tools when all files are written.
 
@@ -235,6 +250,10 @@ Use these tools iteratively to implement the plan:
     Always supply the complete file; never a partial diff.
     Call read_file first if you need to preserve parts of an existing file.
   - shell_exec(command, reason) — run a shell command; requires user approval.
+  - todowrite(todos) / todoread() — maintain a subtask checklist. For
+    multi-step work, plan with todowrite first, then keep it updated (one task
+    in_progress at a time, mark completed when done), passing the full list
+    each time. Skip it for trivial single-step requests.
 
 Work one tool call at a time. Stop when all files are written. Never emit raw JSON.
 
@@ -263,6 +282,10 @@ Use these tools iteratively to implement the plan:
   - write_patch(path, content) — create or overwrite a file with full content.
     Always supply the complete file; never a partial diff.
   - shell_exec(command, reason) — run a shell command; requires user approval.
+  - todowrite(todos) / todoread() — keep a checklist of subtasks for multi-step
+    work. Plan with todowrite first, then update it as you go (one task
+    in_progress at a time, mark completed when done), passing the full list
+    each time. Skip it for trivial single-step requests.
 
 Work one tool call at a time. Stop when all files are written. Never emit raw JSON.
 

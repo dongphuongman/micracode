@@ -56,13 +56,33 @@ export interface ErrorEvent {
   recoverable: boolean;
 }
 
+export type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
+
+/** A single entry in the agent's session checklist. */
+export interface TodoItem {
+  id: string;
+  content: string;
+  status: TodoStatus;
+}
+
+/**
+ * Full snapshot of the agent's todo list, emitted whenever it changes.
+ * The list is sent in its entirety (not as a delta), so the UI renders the
+ * current checklist by replacing whatever it last had.
+ */
+export interface TodoUpdateEvent {
+  type: "todo.update";
+  todos: TodoItem[];
+}
+
 export type StreamEvent =
   | MessageDeltaEvent
   | FileWriteEvent
   | FileDeleteEvent
   | ShellExecEvent
   | StatusEvent
-  | ErrorEvent;
+  | ErrorEvent
+  | TodoUpdateEvent;
 
 export type StreamEventType = StreamEvent["type"];
 
@@ -101,6 +121,8 @@ export function isStreamEvent(value: unknown): value is StreamEvent {
       const e = value as ErrorEvent;
       return typeof e.message === "string" && typeof e.recoverable === "boolean";
     }
+    case "todo.update":
+      return Array.isArray((value as TodoUpdateEvent).todos);
     default:
       return false;
   }

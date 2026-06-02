@@ -30,6 +30,8 @@ function _Avatar({ className, initials = "MC" }: { className?: string; initials?
 
 export function TopNav({ projectId, projectName, onPublish }: TopNavProps) {
   const _display = projectName?.trim() || projectId;
+  const isPanelOpen = useUiStore((s) => s.isPanelOpen);
+  const togglePanel = useUiStore((s) => s.togglePanel);
 
   return (
     <header className="flex h-12 shrink-0 items-center justify-between border-zinc-800 bg-black px-3 text-sm text-zinc-50">

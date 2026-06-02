@@ -283,6 +283,71 @@ def execute_shell_exec(command: str, cwd: Path, output_limit: int) -> str:
         return f"error: {exc}"
 
 
+# ---------------------------------------------------------------------------
+# Todo list (session checklist) — todowrite / todoread
+# ---------------------------------------------------------------------------
+
+_TODO_STATUSES = ("pending", "in_progress", "completed", "cancelled")
+_TODO_STATUS_GLYPH = {
+    "pending": "[ ]",
+    "in_progress": "[~]",
+    "completed": "[x]",
+    "cancelled": "[-]",
+}
+
+
+def normalize_todos(raw: object) -> tuple[list["TodoItem"], str | None]:
+    """Coerce LLM-supplied todo data into validated ``TodoItem`` objects.
+
+    Returns ``(items, error)``. ``error`` is a non-None string only when the
+    input is structurally unusable (e.g. not a list); individual malformed
+    entries are skipped rather than failing the whole write so a single bad
+    item never derails the loop.
+    """
+    from .schemas.stream import TodoItem
+
+    if not isinstance(raw, list):
+        return [], "error: 'todos' must be a list of todo items"
+
+    items: list[TodoItem] = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            continue
+        content = entry.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        status = entry.get("status", "pending")
+        if status not in _TODO_STATUSES:
+            status = "pending"
+        raw_id = entry.get("id")
+        item_id = str(raw_id) if raw_id not in (None, "") else f"todo-{index + 1}"
+        items.append(TodoItem(id=item_id, content=content.strip(), status=status))
+    return items, None
+
+
+def render_todos(todos: list["TodoItem"]) -> str:
+    """Render a todo list as a compact text checklist for the LLM tool result."""
+    if not todos:
+        return "(todo list is empty)"
+    done = sum(1 for t in todos if t.status == "completed")
+    lines = [f"Todos ({done}/{len(todos)} completed):"]
+    lines += [f"{_TODO_STATUS_GLYPH[t.status]} {t.content}" for t in todos]
+    return "\n".join(lines)
+
+
+def execute_todowrite(raw_todos: object) -> tuple[list["TodoItem"], str]:
+    """Replace the session todo list; return (items, result_message)."""
+    items, error = normalize_todos(raw_todos)
+    if error is not None:
+        return [], error
+    return items, render_todos(items)
+
+
+def execute_todoread(todos: list["TodoItem"]) -> str:
+    """Return the current session todo list as text."""
+    return render_todos(todos)
+
+
 _WEBFETCH_USER_AGENT = "micracode-webfetch/1.0 (+https://github.com/Jamessdevops/micracode)"
 
 
@@ -494,6 +559,35 @@ class _WebFetchInput(BaseModel):
     )
 
 
+class _TodoItemInput(BaseModel):
+    content: str = PField(description="Short imperative description of the subtask")
+    status: Literal["pending", "in_progress", "completed", "cancelled"] = PField(
+        default="pending",
+        description=(
+            "Current state: 'pending' (not started), 'in_progress' (exactly one "
+            "at a time), 'completed' (done), or 'cancelled' (no longer needed)."
+        ),
+    )
+    id: str | None = PField(
+        default=None,
+        description="Stable identifier for the item; reuse it across updates to the same task.",
+    )
+
+
+class _TodoWriteInput(BaseModel):
+    todos: list[_TodoItemInput] = PField(
+        description=(
+            "The COMPLETE todo list. This replaces the previous list entirely, "
+            "so always include every item with its current status — not just the "
+            "ones that changed."
+        )
+    )
+
+
+class _TodoReadInput(BaseModel):
+    pass
+
+
 class _QuestionInput(BaseModel):
     question: str = PField(
         description="A single, specific clarifying question to ask the user"
@@ -595,6 +689,30 @@ QUESTION_TOOL = StructuredTool.from_function(
     args_schema=_QuestionInput,
 )
 
+TODOWRITE_TOOL = StructuredTool.from_function(
+    lambda todos: "",
+    name="todowrite",
+    description=(
+        "Create or update the session todo list — a structured checklist of the "
+        "subtasks for the current request. Use it for multi-step work to plan "
+        "before you start and to track progress as you go: mark a task "
+        "'in_progress' before working on it (only one at a time) and 'completed' "
+        "as soon as it is done. Pass the COMPLETE list every time; it replaces "
+        "the previous one. Skip it for trivial single-step requests."
+    ),
+    args_schema=_TodoWriteInput,
+)
+
+TODOREAD_TOOL = StructuredTool.from_function(
+    lambda: "",
+    name="todoread",
+    description=(
+        "Read the current session todo list. Use this to re-check your plan and "
+        "remaining work before deciding what to do next."
+    ),
+    args_schema=_TodoReadInput,
+)
+
 ALL_TOOLS = [
     READ_FILE_TOOL,
     WRITE_PATCH_TOOL,
@@ -605,4 +723,6 @@ ALL_TOOLS = [
     SEARCH_REPLACE_TOOL,
     WEBFETCH_TOOL,
     QUESTION_TOOL,
+    TODOWRITE_TOOL,
+    TODOREAD_TOOL,
 ]

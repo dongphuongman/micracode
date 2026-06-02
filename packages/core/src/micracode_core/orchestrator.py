@@ -26,6 +26,8 @@ from .schemas.stream import (
     MessageDeltaEvent,
     StatusEvent,
     StreamEvent,
+    TodoItem,
+    TodoUpdateEvent,
     ToolCallEvent,
     ToolDeniedEvent,
     ToolPermissionRequestEvent,
@@ -38,7 +40,7 @@ from .context import load_context
 from .llm import LLMFactory
 from .patcher import ProjectContext
 from .prompts import get_prompt
-from .tools import ALL_TOOLS, execute_glob, execute_grep, execute_list_files, execute_read_file, execute_search_replace, execute_shell_exec, execute_webfetch, execute_write_patch
+from .tools import ALL_TOOLS, execute_glob, execute_grep, execute_list_files, execute_read_file, execute_search_replace, execute_shell_exec, execute_todoread, execute_todowrite, execute_webfetch, execute_write_patch
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +289,10 @@ async def _codegen_tool_loop(
     messages: list[BaseMessage] = _build_codegen_messages(prompt, plan, history, context, family)
     project_root = storage.project_dir(project_id)
 
+    # Session checklist maintained by the todowrite/todoread tools. Lives for
+    # the duration of this tool loop (one request).
+    todos: list[TodoItem] = []
+
     _approval_registry[request_id] = {}
     _answer_registry[request_id] = {}
 
@@ -488,6 +494,25 @@ async def _codegen_tool_loop(
                         approved=True,
                     )
                     tool_result = output
+
+                elif tool_name == "todowrite":
+                    todos, tool_result = execute_todowrite(args.get("todos"))
+                    yield TodoUpdateEvent(todos=list(todos))
+                    yield ToolResultEvent(
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                        output=tool_result,
+                        approved=True,
+                    )
+
+                elif tool_name == "todoread":
+                    tool_result = execute_todoread(todos)
+                    yield ToolResultEvent(
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                        output=tool_result,
+                        approved=True,
+                    )
 
                 else:
                     tool_result = f"error: unknown tool {tool_name!r}"

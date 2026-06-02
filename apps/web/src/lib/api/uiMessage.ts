@@ -43,6 +43,13 @@ export type MicracodeDataParts = {
     options: string[];
     request_id: string;
   };
+  "todo-update": {
+    todos: {
+      id: string;
+      content: string;
+      status: "pending" | "in_progress" | "completed" | "cancelled";
+    }[];
+  };
 };
 
 export interface MicracodeMessageMetadata {

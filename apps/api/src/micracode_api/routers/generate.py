@@ -194,6 +194,22 @@ async def _ui_message_stream(
                         },
                     }
                 )
+            elif event.type == "todo.update":
+                yield _frame(
+                    {
+                        "type": "data-todo-update",
+                        "data": {
+                            "todos": [
+                                {
+                                    "id": t.id,
+                                    "content": t.content,
+                                    "status": t.status,
+                                }
+                                for t in event.todos
+                            ]
+                        },
+                    }
+                )
             elif event.type == "error":
                 yield _frame({"type": "error", "errorText": event.message})
     except asyncio.CancelledError:

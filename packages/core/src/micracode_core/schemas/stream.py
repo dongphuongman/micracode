@@ -85,6 +85,25 @@ class ToolQuestionEvent(_Event):
     options: list[str] = Field(default_factory=list)
 
 
+class TodoItem(_Event):
+    """A single entry in the agent's session checklist."""
+
+    id: str
+    content: str
+    status: Literal["pending", "in_progress", "completed", "cancelled"] = "pending"
+
+
+class TodoUpdateEvent(_Event):
+    """Full snapshot of the agent's todo list, emitted whenever it changes.
+
+    The list is sent in its entirety (not as a delta) so the UI can render
+    the current checklist by replacing whatever it last had.
+    """
+
+    type: Literal["todo.update"] = "todo.update"
+    todos: list[TodoItem] = Field(default_factory=list)
+
+
 StreamEvent = Annotated[
     MessageDeltaEvent
     | FileWriteEvent
@@ -96,7 +115,8 @@ StreamEvent = Annotated[
     | ToolPermissionRequestEvent
     | ToolResultEvent
     | ToolDeniedEvent
-    | ToolQuestionEvent,
+    | ToolQuestionEvent
+    | TodoUpdateEvent,
     Field(discriminator="type"),
 ]
 

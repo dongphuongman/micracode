@@ -3,13 +3,18 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Circle,
+  CircleDot,
   HelpCircle,
   History,
+  ListTodo,
   RefreshCw,
   Search,
   Sparkles,
+  XCircle,
   Zap,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -48,10 +53,19 @@ export interface V0ChatPanelProps {
 
 type Stage = "idle" | "planning" | "generating" | "done" | "cancelled" | "plan_ready";
 
+type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
+
+interface TodoItemData {
+  id: string;
+  content: string;
+  status: TodoStatus;
+}
+
 type ProcessLog =
   | { id: string; kind: "thought"; seconds: number }
   | { id: string; kind: "brief"; note?: string }
   | { id: string; kind: "explore"; note: string }
+  | { id: string; kind: "todo"; todos: TodoItemData[] }
   | {
       id: string;
       kind: "tool-call";
@@ -149,6 +163,8 @@ function renderLog(
           <span>{log.note}</span>
         </LogRow>
       );
+    case "todo":
+      return <TodoList todos={log.todos} />;
     case "tool-call": {
       const callLine = formatToolCall(log.toolName, log.args);
       const isExpanded = expandedLogs.has(log.id);
@@ -186,6 +202,56 @@ function renderLog(
       );
     }
   }
+}
+
+function TodoRow({ todo }: { todo: TodoItemData }) {
+  const icon =
+    todo.status === "completed" ? (
+      <CheckCircle2 className="size-3.5 text-emerald-400" />
+    ) : todo.status === "in_progress" ? (
+      <CircleDot className="size-3.5 text-sky-400" />
+    ) : todo.status === "cancelled" ? (
+      <XCircle className="size-3.5 text-zinc-600" />
+    ) : (
+      <Circle className="size-3.5 text-zinc-600" />
+    );
+  return (
+    <div className="flex items-start gap-2 py-0.5">
+      <span className="mt-0.5 shrink-0">{icon}</span>
+      <span
+        className={cn(
+          "leading-snug",
+          todo.status === "completed" && "text-zinc-500 line-through",
+          todo.status === "cancelled" && "text-zinc-600 line-through",
+          todo.status === "in_progress" && "text-zinc-100",
+          todo.status === "pending" && "text-zinc-400",
+        )}
+      >
+        {todo.content}
+      </span>
+    </div>
+  );
+}
+
+function TodoList({ todos }: { todos: TodoItemData[] }) {
+  if (todos.length === 0) return null;
+  const done = todos.filter((t) => t.status === "completed").length;
+  return (
+    <div className="my-1 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 text-xs">
+      <div className="mb-1.5 flex items-center gap-1.5 text-zinc-300">
+        <ListTodo className="size-3.5 text-zinc-400" />
+        <span className="font-medium">Tasks</span>
+        <span className="text-zinc-500">
+          {done}/{todos.length}
+        </span>
+      </div>
+      <div className="space-y-0">
+        {todos.map((t) => (
+          <TodoRow key={t.id} todo={t} />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function QuestionCard({
@@ -359,6 +425,44 @@ export function V0ChatPanel({
     [],
   );
 
+  // todowrite replaces the whole list each call, so we keep a single "todo"
+  // log per assistant message and update its todos in place rather than
+  // appending a new row every time.
+  const upsertTodoLog = useCallback(
+    (todos: TodoItemData[], messagesSnapshot: MicracodeUIMessage[]) => {
+      let id: string | null = null;
+      for (let i = messagesSnapshot.length - 1; i >= 0; i--) {
+        if (messagesSnapshot[i]!.role === "assistant") {
+          id = messagesSnapshot[i]!.id;
+          break;
+        }
+      }
+      if (id) {
+        const targetId = id;
+        setLogsByAssistantId((prev) => {
+          const logs = prev[targetId] ?? [];
+          const idx = logs.findIndex((l) => l.kind === "todo");
+          const updated = [...logs];
+          if (idx === -1) {
+            updated.push({ id: nextLogId(), kind: "todo", todos });
+          } else {
+            updated[idx] = { ...updated[idx]!, todos } as ProcessLog;
+          }
+          return { ...prev, [targetId]: updated };
+        });
+      } else {
+        const buf = pendingLogsRef.current;
+        const idx = buf.findIndex((l) => l.kind === "todo");
+        if (idx === -1) {
+          buf.push({ id: nextLogId(), kind: "todo", todos });
+        } else {
+          buf[idx] = { ...buf[idx]!, todos } as ProcessLog;
+        }
+      }
+    },
+    [],
+  );
+
   const updateLogOutput = useCallback(
     (toolCallId: string, output: string, outputError: boolean) => {
       setLogsByAssistantId((prev) => {
@@ -443,8 +547,14 @@ export function V0ChatPanel({
           case "data-tool-call": {
             const { tool_call_id, tool_name, args, reason } = part.data;
             // The question tool renders as an interactive card via
-            // `data-tool-question`; skip the generic log row for it.
-            if (tool_name === "question") break;
+            // `data-tool-question`; the todo tools render as a live checklist
+            // via `data-todo-update`. Skip the generic log row for all three.
+            if (
+              tool_name === "question" ||
+              tool_name === "todowrite" ||
+              tool_name === "todoread"
+            )
+              break;
             setMessages((prev) => {
               appendLogToLatestAssistant(
                 {
@@ -475,6 +585,14 @@ export function V0ChatPanel({
                 },
                 prev,
               );
+              return prev;
+            });
+            break;
+          }
+          case "data-todo-update": {
+            const todos = part.data.todos as TodoItemData[];
+            setMessages((prev) => {
+              upsertTodoLog(todos, prev);
               return prev;
             });
             break;
