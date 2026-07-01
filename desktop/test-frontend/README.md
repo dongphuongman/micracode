@@ -1,11 +1,11 @@
 # test-frontend
 
-A zero-build, single-file **React** chat client for the Rust `micracode-api`
-backend (`desktop/api`), styled after the Claude desktop app. It's still just
-`index.html` with no bundler or `npm install`: React 18 and Babel load from a
-CDN, and the app's JSX is transpiled in-browser (with the classic runtime, so it
-compiles to `React.createElement` and needs no module system). Loading therefore
-needs network access for the CDN; serve and run it exactly as before.
+A **Next.js** (App Router, React 19, Tailwind) chat client for the Rust
+`micracode-api` backend (`desktop/api`), styled after the Claude desktop app. It
+lives in the monorepo as the `test-frontend` workspace; the sidebar is the
+genuine [Aceternity sidebar](https://ui.aceternity.com/components/sidebar)
+(`motion` + `@tabler/icons-react`) with the Recents tree rendered inside its
+hover-expand shell. Source is under `src/` (`app/`, `components/`, `lib/`).
 
 It's a real chat surface, not a debug panel, but every interaction maps to a
 backend endpoint:
@@ -56,17 +56,20 @@ backend endpoint:
    `cargo run`. Each turn is a real API call and is billed accordingly. To test
    the plumbing without spending tokens, use the mocks below instead.
 
-2. Serve this folder. **Use port 3000** — the backend's CORS allow-list defaults
-   to `http://localhost:3000`, so the browser's `fetch`/`EventSource` calls are
-   accepted without extra config:
+2. Run this app. **It serves on port 3000** — the backend's CORS allow-list
+   defaults to `http://localhost:3000`, so the browser's `fetch`/`EventSource`
+   calls are accepted without extra config:
 
    ```bash
    cd desktop/test-frontend
-   python3 -m http.server 3000
+   bun install          # first time only (or `bun install` at the repo root)
+   bun run dev          # next dev on http://localhost:3000
    ```
 
-   Open <http://localhost:3000>. (`file://` is CORS-blocked; to allow another
-   origin set `APP_WEB_ORIGIN` when starting the backend.)
+   Or from the repo root: `bun run dev:client`. Open <http://localhost:3000>.
+   (To point the UI at a different backend, set `NEXT_PUBLIC_API_BASE_URL`, or
+   use the gear in the sidebar footer; to allow another frontend origin set
+   `APP_WEB_ORIGIN` when starting the backend.)
 
 The API base URL and an optional workspace path live behind the gear icon in the
 sidebar footer.

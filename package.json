@@ -6,6 +6,7 @@
   "workspaces": [
     "apps/web",
     "apps/desktop",
+    "desktop/test-frontend",
     "packages/*"
   ],
   "engines": {
@@ -16,6 +17,7 @@
   "scripts": {
     "dev": "bun run --parallel dev:web dev:api",
     "dev:web": "bun --filter web dev",
+    "dev:client": "bun --filter test-frontend dev",
     "dev:api": "uv run --directory apps/api uvicorn micracode_api.main:app --reload --host 127.0.0.1 --port 8000",
     "build": "bun --filter web build",
     "start:web": "bun --filter web start",
